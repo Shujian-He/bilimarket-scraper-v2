@@ -1,0 +1,46 @@
+# OS metadata.
+.DS_Store
+
+# Python bytecode and caches.
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Development environments and tooling.
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+requirements-dev.txt
+tests/
+test_*.py
+conftest.py
+
+# AI handoff, planning, and local agent instructions.
+HANDOFF.md
+IMPLEMENTATION_PLAN.md
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.agents/
+.codex/
+docs/superpowers/
+
+# Local secrets and generated scrape output.
+cookies.txt
+.env
+runs/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+state.json
+listings.csv
+matches.csv
