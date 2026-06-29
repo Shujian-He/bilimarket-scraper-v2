@@ -134,12 +134,8 @@ Scrape ended: status=max_pages, pages=5, listings=100, matches=3, run_dir=runs/2
 - `--discount`：一个或多个支持的折扣筛选项。默认：
   `0-30 30-50 50-70 70-100`。
 - `--category`：一个类别 id，留空表示全部类别。默认留空。
-- `--cookie-file`：Cookie 文件路径。默认：`cookies.txt`。
-- `--cookie-env`：Cookie 环境变量名。默认：`BILI_COOKIE`。
-- `--output-dir`：run 目录的父目录。默认：`runs`。
-- `--run-id`：可选的 run 目录名，会创建在 `--output-dir` 下。
+- `--run-id`：可选的 run 目录名，会创建在 `runs` 下。
 - `--resume-dir`：已有 run 目录，用于中断续跑。
-- `--start-next-id`：手动指定 API 游标。
 - `--max-pages`：当前命令最多抓取多少页。
 - `--min-delay`：每次请求前的最短等待时间。默认：`1.2`。
 - `--max-delay`：每次请求前的最长等待时间。默认：`2.8`。
@@ -189,23 +185,13 @@ run 时：
 ```bash
 PYTHONPATH=. python3 -m bilimarket_scraper \
   --resume-dir runs/<run-id> \
-  --want 千早爱音 \
-  --price 10000-20000 20000-0 \
-  --discount 50-70 70-100 \
-  --category 2312 \
   --max-pages 5
 ```
 
-续跑时请保持和原 run 相同的筛选参数。`state.json` 会记录原始 query 方便检查，
-但 CLI 实际使用的是当前命令传入的筛选参数。
-
-如果需要手动指定游标，可以传入：
-
-```bash
---start-next-id <nextId>
-```
-
-`nextId` 是 Bilibili 返回的不透明游标，续跑时应原样传回，不要改写。
+续跑时，CLI 会从 `state.json` 读取想要匹配的关键词、价格筛选、折扣筛选、
+类别、游标和计数信息。`--resume-dir` 不能和 `--want`、`--price`、
+`--discount` 或 `--category` 同时使用；如果传入这些参数，程序会直接报错，
+避免用不匹配的游标和筛选条件继续抓取。
 
 ## 输出文件
 
@@ -271,6 +257,7 @@ SQLite WAL 辅助文件。
 - `next_id`：下一页游标；到达末尾时为 `null`。
 - `pages_written`：当前 run 目录内已保存的页数。
 - `listings_written`：已追加到 CSV 的商品行数。
+- `wanted_keywords`：用于写入 `matches.csv` 的匹配关键词。
 - `query`：本次运行的价格、折扣、类别和排序参数。
 - `updated_at`：UTC checkpoint 更新时间。
 

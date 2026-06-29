@@ -61,6 +61,7 @@ class Checkpoint:
     next_id: str | None
     pages_written: int
     listings_written: int
+    wanted_keywords: tuple[str, ...]
     query: dict[str, Any]
     updated_at: str
 
@@ -150,6 +151,7 @@ class RunStorage:
             next_id=next_id,
             pages_written=pages_written,
             listings_written=listings_written,
+            wanted_keywords=self.wanted_keywords,
             query=query.as_checkpoint(),
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -170,6 +172,7 @@ class RunStorage:
             next_id=raw.get("next_id"),
             pages_written=int(raw.get("pages_written", 0)),
             listings_written=int(raw.get("listings_written", 0)),
+            wanted_keywords=_text_tuple(raw.get("wanted_keywords")),
             query=dict(raw.get("query", {})),
             updated_at=str(raw.get("updated_at", "")),
         )
@@ -207,3 +210,13 @@ class RunStorage:
             return False
         haystack = listing.name.casefold()
         return any(keyword.casefold() in haystack for keyword in self.wanted_keywords)
+
+
+def _text_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = (value,)
+    if not isinstance(value, list | tuple):
+        return ()
+    return tuple(text for item in value if (text := str(item).strip()))

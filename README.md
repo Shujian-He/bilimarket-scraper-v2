@@ -137,12 +137,8 @@ until the API has no next cursor, you interrupt it, or an error stops the run.
 - `--discount`: One or more supported discount filters. Default:
   `0-30 30-50 50-70 70-100`.
 - `--category`: One category id, or blank for all categories. Default: blank.
-- `--cookie-file`: Cookie file path. Default: `cookies.txt`.
-- `--cookie-env`: Cookie environment variable name. Default: `BILI_COOKIE`.
-- `--output-dir`: Parent directory for runs. Default: `runs`.
-- `--run-id`: Optional run directory name under `--output-dir`.
+- `--run-id`: Optional run directory name under `runs`.
 - `--resume-dir`: Existing run directory to resume from.
-- `--start-next-id`: Manual API cursor override.
 - `--max-pages`: Stop after this many fetched pages in the current command.
 - `--min-delay`: Minimum delay before each request. Default: `1.2`.
 - `--max-delay`: Maximum delay before each request. Default: `2.8`.
@@ -194,25 +190,13 @@ and SQLite. To continue a previous run:
 ```bash
 PYTHONPATH=. python3 -m bilimarket_scraper \
   --resume-dir runs/<run-id> \
-  --want 千早爱音 \
-  --price 5000-10000 10000-20000 20000-0 \
-  --discount 50-70 70-100 \
-  --category 2312 \
   --max-pages 5
 ```
 
-Keep the same filters when resuming a run. The checkpoint records the original
-query for inspection, but the CLI uses the filter flags passed to the current
-command.
-
-If you need to resume from a cursor manually, pass:
-
-```bash
---start-next-id <nextId>
-```
-
-The `nextId` cursor is an opaque value returned by Bilibili. Pass it back
-unchanged.
+When resuming, the CLI loads wanted keywords, price filters, discount filters,
+category, cursor, and counters from `state.json`. Passing `--want`, `--price`,
+`--discount`, or `--category` together with `--resume-dir` fails fast so a run
+cannot accidentally continue with a mismatched cursor and filter set.
 
 ## Output
 
@@ -278,6 +262,7 @@ SQLite WAL sidecar files such as `market.sqlite3-shm` and
 - `next_id`: Cursor for the next page, or `null` at the end.
 - `pages_written`: Number of pages saved in this run directory.
 - `listings_written`: Number of listing rows appended to CSV.
+- `wanted_keywords`: Keywords used for `matches.csv`.
 - `query`: Price, discount, category and sort values used for the run.
 - `updated_at`: UTC checkpoint update timestamp.
 

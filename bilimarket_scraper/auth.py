@@ -5,25 +5,24 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .config import DEFAULT_USER_AGENT, MARKET_REFERER
+from .config import DEFAULT_COOKIE_FILE, DEFAULT_USER_AGENT, MARKET_REFERER
 from .errors import ConfigurationError
 
+COOKIE_ENV_VAR = "BILI_COOKIE"
 
-def load_cookie(cookie_file: Path | str | None, *, env_var: str = "BILI_COOKIE") -> str:
+
+def load_cookie() -> str:
     """Read the authentication cookie without logging or echoing the secret."""
 
-    env_cookie = os.environ.get(env_var, "").strip()
+    env_cookie = os.environ.get(COOKIE_ENV_VAR, "").strip()
     if env_cookie:
         return env_cookie
 
-    if cookie_file is None:
-        raise ConfigurationError(f"Set {env_var} or provide --cookie-file.")
-
-    path = Path(cookie_file)
+    path = Path(DEFAULT_COOKIE_FILE)
     try:
         cookie = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError as exc:
-        raise ConfigurationError(f"Cookie file does not exist: {path}") from exc
+        raise ConfigurationError(f"Set {COOKIE_ENV_VAR} or create cookie file: {path}") from exc
     except OSError as exc:
         raise ConfigurationError(f"Unable to read cookie file {path}: {exc}") from exc
 

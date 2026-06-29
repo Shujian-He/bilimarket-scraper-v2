@@ -5,15 +5,16 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from .auth import build_headers, load_cookie
 from .client import MarketClient
 from .config import (
     DEFAULT_CATEGORY_FILTER,
-    DEFAULT_COOKIE_FILE,
     DEFAULT_DISCOUNT_FILTERS,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PRICE_FILTERS,
+    DEFAULT_SORT_TYPE,
     VALID_CATEGORY_FILTERS,
     VALID_DISCOUNT_FILTERS,
     VALID_PRICE_FILTERS,
@@ -22,37 +23,33 @@ from .errors import ScraperError
 from .models import MarketQuery
 from .rate_limit import DelayPolicy
 from .runner import ScraperRunner
-from .storage import RunStorage
+from .storage import Checkpoint, RunStorage
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Standalone modular scraper for Bilibili C2C market listings."
     )
-    parser.add_argument("--want", nargs="*", default=(), help="Wanted keywords.")
+    parser.add_argument("--want", nargs="*", default=None, help="Wanted keywords.")
     parser.add_argument(
         "--price",
         nargs="+",
-        default=list(DEFAULT_PRICE_FILTERS),
+        default=None,
         help="Supported price filters, for example: 10000-20000 20000-0.",
     )
     parser.add_argument(
         "--discount",
         nargs="+",
-        default=list(DEFAULT_DISCOUNT_FILTERS),
+        default=None,
         help="Supported discount filters, for example: 70-100.",
     )
     parser.add_argument(
         "--category",
-        default=DEFAULT_CATEGORY_FILTER,
+        default=None,
         help="Category id, or blank for all categories.",
     )
-    parser.add_argument("--cookie-file", type=Path, default=DEFAULT_COOKIE_FILE)
-    parser.add_argument("--cookie-env", default="BILI_COOKIE")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--run-id", help="Optional run directory name.")
     parser.add_argument("--resume-dir", type=Path, help="Existing run directory to resume.")
-    parser.add_argument("--start-next-id", help="Manual cursor override.")
     parser.add_argument("--max-pages", type=int, help="Stop after this many fetched pages.")
     parser.add_argument("--min-delay", type=float, default=1.2)
     parser.add_argument("--max-delay", type=float, default=2.8)
@@ -70,20 +67,16 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        query = _query_from_args(args)
-        keywords = _split_values(args.want)
-        storage = _storage_from_args(args, keywords)
-        checkpoint = storage.read_checkpoint() if args.resume_dir else None
-        start_next_id = args.start_next_id
+        storage, query, checkpoint = _run_context_from_args(args)
+        start_next_id = checkpoint.next_id if checkpoint is not None else None
         start_pages = 0
         start_listings = 0
-        if checkpoint is not None and start_next_id is None:
-            start_next_id = checkpoint.next_id
+        if checkpoint is not None:
             start_pages = checkpoint.pages_written
             start_listings = checkpoint.listings_written
 
         delay_policy = _delay_policy_from_args(args)
-        cookie = load_cookie(args.cookie_file, env_var=args.cookie_env)
+        cookie = load_cookie()
         client = MarketClient(build_headers(cookie), logger=print)
 
         try:
@@ -118,12 +111,55 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
+def _run_context_from_args(
+    args: argparse.Namespace,
+) -> tuple[RunStorage, MarketQuery, Checkpoint | None]:
+    if args.resume_dir is not None:
+        if args.run_id:
+            raise ValueError("--run-id cannot be used with --resume-dir")
+        _reject_resume_managed_args(args)
+
+        checkpoint_reader = RunStorage(args.resume_dir)
+        checkpoint = checkpoint_reader.read_checkpoint()
+        if checkpoint is None:
+            raise ValueError(f"No checkpoint found in resume directory: {args.resume_dir}")
+
+        query = _query_from_checkpoint(checkpoint)
+        storage = RunStorage(args.resume_dir, wanted_keywords=checkpoint.wanted_keywords)
+        return storage, query, checkpoint
+
+    query = _query_from_args(args)
+    keywords = _split_values(args.want)
+    storage = RunStorage.new(DEFAULT_OUTPUT_DIR, run_id=args.run_id, wanted_keywords=keywords)
+    return storage, query, None
+
+
+def _reject_resume_managed_args(args: argparse.Namespace) -> None:
+    conflicts = []
+    if args.want is not None:
+        conflicts.append("--want")
+    if args.price is not None:
+        conflicts.append("--price")
+    if args.discount is not None:
+        conflicts.append("--discount")
+    if args.category is not None:
+        conflicts.append("--category")
+
+    if conflicts:
+        raise ValueError(
+            f"{', '.join(conflicts)} cannot be used with --resume-dir; "
+            "values are loaded from state.json"
+        )
+
+
 def _query_from_args(args: argparse.Namespace) -> MarketQuery:
-    prices = _validate_values("price", _split_values(args.price), VALID_PRICE_FILTERS)
+    price_values = DEFAULT_PRICE_FILTERS if args.price is None else args.price
+    discount_values = DEFAULT_DISCOUNT_FILTERS if args.discount is None else args.discount
+    prices = _validate_values("price", _split_values(price_values), VALID_PRICE_FILTERS)
     discounts = _validate_values(
-        "discount", _split_values(args.discount), VALID_DISCOUNT_FILTERS
+        "discount", _split_values(discount_values), VALID_DISCOUNT_FILTERS
     )
-    category = args.category.strip()
+    category = DEFAULT_CATEGORY_FILTER if args.category is None else args.category.strip()
     if category not in VALID_CATEGORY_FILTERS:
         raise ValueError(f"Unsupported category filter: {category!r}")
     return MarketQuery(
@@ -133,12 +169,29 @@ def _query_from_args(args: argparse.Namespace) -> MarketQuery:
     )
 
 
-def _storage_from_args(args: argparse.Namespace, keywords: tuple[str, ...]) -> RunStorage:
-    if args.resume_dir is not None:
-        if args.run_id:
-            raise ValueError("--run-id cannot be used with --resume-dir")
-        return RunStorage(args.resume_dir, wanted_keywords=keywords)
-    return RunStorage.new(args.output_dir, run_id=args.run_id, wanted_keywords=keywords)
+def _query_from_checkpoint(checkpoint: Checkpoint) -> MarketQuery:
+    raw = checkpoint.query
+    category = str(raw.get("categoryFilter", DEFAULT_CATEGORY_FILTER)).strip()
+    if category not in VALID_CATEGORY_FILTERS:
+        raise ValueError(f"Checkpoint has unsupported category filter: {category!r}")
+
+    prices = _validate_values(
+        "price",
+        _split_values(raw.get("priceFilters")),
+        VALID_PRICE_FILTERS,
+    )
+    discounts = _validate_values(
+        "discount",
+        _split_values(raw.get("discountFilters")),
+        VALID_DISCOUNT_FILTERS,
+    )
+    sort_type = str(raw.get("sortType") or DEFAULT_SORT_TYPE).strip()
+    return MarketQuery(
+        category_filter=category,
+        price_filters=prices,
+        discount_filters=discounts,
+        sort_type=sort_type,
+    )
 
 
 def _delay_policy_from_args(args: argparse.Namespace) -> DelayPolicy:
@@ -159,7 +212,12 @@ def _delay_policy_from_args(args: argparse.Namespace) -> DelayPolicy:
     )
 
 
-def _split_values(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+def _split_values(values: Any) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str):
+        values = (values,)
+
     split: list[str] = []
     for value in values:
         split.extend(part.strip() for part in str(value).split(","))
