@@ -33,6 +33,8 @@ GEMINI.md
 .agents/
 .codex/
 docs/superpowers/
+.superpowers/
+prototypes/
 
 # Local secrets and generated scrape output.
 cookies.txt
