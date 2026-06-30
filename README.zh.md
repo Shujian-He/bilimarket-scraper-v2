@@ -68,12 +68,10 @@ PYTHONPATH=. python3 -m bilimarket_scraper
 
 ## Cookies
 
-爬虫需要使用你的 Bilibili 登录 Cookie 访问市集 API。Cookie 读取顺序如下：
+爬虫需要使用你的 Bilibili 登录 Cookie 访问市集 API。它会从仓库根目录下的
+`cookies.txt` 读取 Cookie。
 
-1. 环境变量 `BILI_COOKIE`。
-2. 仓库根目录下的 `cookies.txt`。
-
-使用本地 Cookie 文件时，先复制模板：
+先复制模板创建本地 Cookie 文件：
 
 ```bash
 cp cookies.example.txt cookies.txt

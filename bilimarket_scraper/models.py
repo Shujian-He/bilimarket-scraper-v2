@@ -1,4 +1,22 @@
-"""Typed request and response objects for the market API."""
+"""Typed request and response objects for the market API.
+
+This module converts between raw Bilibili API JSON and small Python objects
+used by the runner and storage layers. It owns validation of response shape,
+normalization of listing fields, and export rows for CSV and SQLite.
+
+Components:
+    MarketQuery: Immutable request filter object that builds API payloads and
+        checkpoint dictionaries.
+    Listing: Immutable normalized listing with CSV and database row helpers.
+    Page: Immutable parsed API page containing valid listings, cursor, and
+        skipped item errors.
+    _required_text, _optional_text, _required_int, _optional_int,
+    _sum_market_prices, _json_safe_copy: Private parsing helpers.
+
+Example:
+    ``Page.from_response(payload, captured_at="2026-06-30T00:00:00+00:00")``
+    validates a raw API payload and returns normalized ``Listing`` objects.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +30,19 @@ from .errors import APIResponseError
 
 @dataclass(frozen=True)
 class MarketQuery:
-    """Filters sent to the market list endpoint."""
+    """Filters sent to the market list endpoint.
+
+    Args:
+        category_filter: ``str`` category id, or ``""`` for all categories.
+        price_filters: ``tuple[str, ...]`` price ranges accepted by the API.
+        discount_filters: ``tuple[str, ...]`` discount ranges accepted by the
+            API.
+        sort_type: ``str`` API sort mode, defaulting to ``TIME_DESC``.
+
+    Example:
+        ``MarketQuery("", ("20000-0",), ("70-100",))`` requests expensive
+        listings with 70%-100% discount filters.
+    """
 
     category_filter: str
     price_filters: tuple[str, ...]
@@ -20,6 +50,18 @@ class MarketQuery:
     sort_type: str = DEFAULT_SORT_TYPE
 
     def payload(self, next_id: str | None) -> dict[str, Any]:
+        """Build the JSON request body for one API request.
+
+        Args:
+            next_id: ``str | None`` pagination cursor. ``None`` means the first
+                page.
+
+        Returns:
+            dict[str, Any]: API payload with list-valued filters and ``nextId``.
+
+        Example:
+            ``query.payload("abc")["nextId"]`` returns ``"abc"``.
+        """
         return {
             "categoryFilter": self.category_filter,
             "priceFilters": list(self.price_filters),
@@ -29,6 +71,19 @@ class MarketQuery:
         }
 
     def as_checkpoint(self) -> dict[str, Any]:
+        """Serialize stable query settings into checkpoint JSON shape.
+
+        Args:
+            None.
+
+        Returns:
+            dict[str, Any]: JSON-safe dictionary containing filters and sort
+            mode, excluding the page cursor and counters.
+
+        Example:
+            ``query.as_checkpoint()["sortType"]`` returns ``"TIME_DESC"`` for
+            the default query.
+        """
         return {
             "categoryFilter": self.category_filter,
             "priceFilters": list(self.price_filters),
@@ -39,7 +94,26 @@ class MarketQuery:
 
 @dataclass(frozen=True)
 class Listing:
-    """A single market listing normalized from API JSON."""
+    """A single market listing normalized from API JSON.
+
+    Args:
+        captured_at: ``str`` ISO timestamp when the page was fetched.
+        listing_id: ``str`` unique listing id from ``c2cItemsId``.
+        name: ``str`` normalized listing name.
+        current_price: ``int`` current listing price in API units.
+        market_price: ``int | None`` summed market price from detail rows.
+        discount: ``float | None`` current price divided by market price.
+        seller_uid: ``str | None`` seller id when present.
+        seller_name: ``str | None`` seller display name when present.
+        item_count: ``int | None`` number of items in the listing.
+        payment_time: ``str | None`` payment time string from the API.
+        detail_count: ``int`` number of detail entries in ``detailDtoList``.
+        raw: ``dict[str, Any]`` JSON-safe copy of the original item.
+
+    Example:
+        ``Listing.from_api(item, captured_at="time").csv_row()`` turns raw API
+        JSON into a row suitable for ``csv.writer``.
+    """
 
     captured_at: str
     listing_id: str
@@ -56,6 +130,26 @@ class Listing:
 
     @classmethod
     def from_api(cls, item: Any, *, captured_at: str) -> Listing:
+        """Normalize one raw API item into a ``Listing``.
+
+        Args:
+            item: ``Any`` raw element from ``data.data``. It must be a
+                ``dict`` with required id, name, and price fields.
+            captured_at: ``str`` ISO timestamp attached to the containing page.
+
+        Returns:
+            Listing: Normalized listing with string ids, integer prices, and a
+            JSON-safe ``raw`` copy.
+
+        Raises:
+            ValueError: Raised when required fields are missing, invalid, or a
+                price is negative.
+
+        Example:
+            ``Listing.from_api({"c2cItemsId": 1, "c2cItemsName": "A",
+            "price": "100"}, captured_at="time").listing_id`` returns
+            ``"1"``.
+        """
         if not isinstance(item, dict):
             raise ValueError("listing item must be an object")
 
@@ -86,6 +180,18 @@ class Listing:
         )
 
     def csv_row(self) -> list[Any]:
+        """Return the listing fields in ``CSV_HEADER`` order.
+
+        Args:
+            None.
+
+        Returns:
+            list[Any]: Values ready for ``csv.writer.writerow``. Optional values
+            are converted to empty strings for easier spreadsheet reading.
+
+        Example:
+            ``listing.csv_row()[1]`` is the listing id.
+        """
         return [
             self.captured_at,
             self.listing_id,
@@ -101,6 +207,18 @@ class Listing:
         ]
 
     def db_row(self) -> tuple[Any, ...]:
+        """Return the listing fields in ``UPSERT_SQL`` parameter order.
+
+        Args:
+            None.
+
+        Returns:
+            tuple[Any, ...]: SQLite parameter tuple, including ``raw`` encoded
+            as deterministic JSON text.
+
+        Example:
+            ``listing.db_row()[0]`` is the primary-key listing id.
+        """
         return (
             self.listing_id,
             self.name,
@@ -119,7 +237,18 @@ class Listing:
 
 @dataclass(frozen=True)
 class Page:
-    """A parsed API page."""
+    """A parsed API page.
+
+    Args:
+        listings: ``tuple[Listing, ...]`` valid listings parsed from the page.
+        next_id: ``str | None`` cursor for the next page, or ``None`` at the end.
+        skipped_errors: ``tuple[str, ...]`` per-item parse errors for malformed
+            listings that were skipped.
+
+    Example:
+        ``page.next_id is None`` means the runner should stop after writing the
+        current page.
+    """
 
     listings: tuple[Listing, ...]
     next_id: str | None
@@ -127,6 +256,24 @@ class Page:
 
     @classmethod
     def from_response(cls, response: Any, *, captured_at: str) -> Page:
+        """Parse a raw API response into a ``Page``.
+
+        Args:
+            response: ``Any`` decoded JSON object returned by ``MarketClient``.
+            captured_at: ``str`` ISO timestamp to attach to each listing.
+
+        Returns:
+            Page: Parsed page with valid listings, normalized next cursor, and
+            skipped item messages.
+
+        Raises:
+            APIResponseError: Raised when top-level API status or response shape
+                is invalid.
+
+        Example:
+            ``Page.from_response({"code": 0, "data": {"data": [],
+            "nextId": ""}}, captured_at="time").next_id`` returns ``None``.
+        """
         if not isinstance(response, dict):
             raise APIResponseError("API response must be a JSON object.")
         if response.get("code") != 0:
@@ -160,6 +307,21 @@ class Page:
 
 
 def _required_text(value: Any, field_name: str) -> str:
+    """Convert a required value into non-empty stripped text.
+
+    Args:
+        value: ``Any`` value from API JSON.
+        field_name: ``str`` API field name used in error messages.
+
+    Returns:
+        str: Stripped text representation.
+
+    Raises:
+        ValueError: Raised when the value is missing or blank.
+
+    Example:
+        ``_required_text(123, "id")`` returns ``"123"``.
+    """
     text = str(value).strip() if value is not None else ""
     if not text:
         raise ValueError(f"{field_name} is required")
@@ -167,11 +329,37 @@ def _required_text(value: Any, field_name: str) -> str:
 
 
 def _optional_text(value: Any) -> str | None:
+    """Convert an optional value into stripped text or ``None``.
+
+    Args:
+        value: ``Any`` value from API JSON.
+
+    Returns:
+        str | None: Stripped text when present; otherwise ``None``.
+
+    Example:
+        ``_optional_text(" seller ")`` returns ``"seller"``.
+    """
     text = str(value).strip() if value is not None else ""
     return text or None
 
 
 def _required_int(value: Any, field_name: str) -> int:
+    """Convert a required API value into ``int``.
+
+    Args:
+        value: ``Any`` value from API JSON.
+        field_name: ``str`` API field name used in error messages.
+
+    Returns:
+        int: Parsed integer.
+
+    Raises:
+        ValueError: Raised when ``int(value)`` fails.
+
+    Example:
+        ``_required_int("1000", "price")`` returns ``1000``.
+    """
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
@@ -179,6 +367,18 @@ def _required_int(value: Any, field_name: str) -> int:
 
 
 def _optional_int(value: Any) -> int | None:
+    """Convert an optional API value into ``int`` or ``None``.
+
+    Args:
+        value: ``Any`` value from API JSON.
+
+    Returns:
+        int | None: Parsed integer, or ``None`` for missing/blank/invalid input.
+
+    Example:
+        ``_optional_int("")`` returns ``None`` and ``_optional_int("2")``
+        returns ``2``.
+    """
     if value in (None, ""):
         return None
     try:
@@ -188,6 +388,19 @@ def _optional_int(value: Any) -> int | None:
 
 
 def _sum_market_prices(details: Any) -> int | None:
+    """Sum ``marketPrice`` values from listing detail objects.
+
+    Args:
+        details: ``Any`` raw ``detailDtoList`` value from a listing item.
+
+    Returns:
+        int | None: Sum of valid market prices, or ``None`` when no usable
+        prices are present.
+
+    Example:
+        ``_sum_market_prices([{"marketPrice": "1200"}, {"marketPrice": 800}])``
+        returns ``2000``.
+    """
     if not isinstance(details, list):
         return None
 
@@ -206,4 +419,17 @@ def _sum_market_prices(details: Any) -> int | None:
 
 
 def _json_safe_copy(value: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy that can be serialized as JSON.
+
+    Args:
+        value: ``dict[str, Any]`` raw API item.
+
+    Returns:
+        dict[str, Any]: Copy produced through JSON encode/decode so nested
+        structures are detached from the original object.
+
+    Example:
+        ``_json_safe_copy({"id": 1})`` returns a separate ``{"id": 1}``
+        dictionary.
+    """
     return json.loads(json.dumps(value, ensure_ascii=False))

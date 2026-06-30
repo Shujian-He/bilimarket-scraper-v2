@@ -70,12 +70,9 @@ PYTHONPATH=. python3 -m bilimarket_scraper
 ## Cookies
 
 The scraper needs your Bilibili authentication cookie to access the market API.
-It reads cookies in this order:
+It reads the cookie from `cookies.txt` in this repository root.
 
-1. The `BILI_COOKIE` environment variable.
-2. `cookies.txt` in this repository root.
-
-To use a local cookie file:
+Create the local cookie file:
 
 ```bash
 cp cookies.example.txt cookies.txt

@@ -1,4 +1,22 @@
-"""Command line interface for the standalone scraper."""
+"""Command line interface for the standalone scraper.
+
+This module translates terminal arguments into scraper objects and handles the
+top-level process exit codes. Parsing and validation stay here so the runner can
+focus on scraping and the storage layer can focus on files.
+
+Components:
+    build_parser: Builds the ``argparse.ArgumentParser`` and all supported
+        flags.
+    main: Entry point used by ``python -m bilimarket_scraper``.
+    _run_context_from_args: Creates or resumes ``RunStorage`` and query state.
+    _query_from_args, _query_from_checkpoint: Build ``MarketQuery`` instances.
+    _delay_policy_from_args, _split_values, _validate_values: CLI helper
+        functions for timing and filter validation.
+
+Example:
+    ``main(["--max-pages", "1", "--no-sleep"])`` runs a one-page scrape and
+    returns a process-style integer exit code.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +45,19 @@ from .storage import Checkpoint, RunStorage
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for scraper options.
+
+    Args:
+        None.
+
+    Returns:
+        argparse.ArgumentParser: Parser whose ``parse_args`` method returns the
+        namespace consumed by ``main`` and helper functions.
+
+    Example:
+        ``build_parser().parse_args(["--max-pages", "1"]).max_pages`` returns
+        ``1``.
+    """
     parser = argparse.ArgumentParser(
         description="Standalone modular scraper for Bilibili C2C market listings."
     )
@@ -64,6 +95,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the scraper from command-line arguments.
+
+    Args:
+        argv: ``list[str] | None`` command-line arguments excluding the program
+            name. ``None`` makes ``argparse`` read ``sys.argv``.
+
+    Returns:
+        int: Process-style exit code: ``0`` for success, ``1`` for expected
+        scraper/configuration failures, and ``130`` for keyboard interruption.
+
+    Example:
+        ``main(["--max-pages", "1", "--no-sleep"])`` performs a bounded run
+        suitable for a manual smoke test.
+    """
     args = build_parser().parse_args(argv)
 
     try:
@@ -114,6 +159,23 @@ def main(argv: list[str] | None = None) -> int:
 def _run_context_from_args(
     args: argparse.Namespace,
 ) -> tuple[RunStorage, MarketQuery, Checkpoint | None]:
+    """Build storage, query, and optional checkpoint from parsed CLI args.
+
+    Args:
+        args: ``argparse.Namespace`` returned by ``build_parser().parse_args``.
+
+    Returns:
+        tuple[RunStorage, MarketQuery, Checkpoint | None]: Storage target,
+        request query, and checkpoint when resuming.
+
+    Raises:
+        ValueError: Raised for incompatible resume options or missing
+        checkpoints.
+
+    Example:
+        Passing args parsed from ``["--resume-dir", "runs/demo"]`` loads query
+        and keyword settings from ``runs/demo/state.json``.
+    """
     if args.resume_dir is not None:
         if args.run_id:
             raise ValueError("--run-id cannot be used with --resume-dir")
@@ -135,6 +197,22 @@ def _run_context_from_args(
 
 
 def _reject_resume_managed_args(args: argparse.Namespace) -> None:
+    """Reject options that must come from a resume checkpoint.
+
+    Args:
+        args: ``argparse.Namespace`` parsed CLI options.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: Raised when users combine ``--resume-dir`` with filters or
+        keyword options that would make the checkpoint ambiguous.
+
+    Example:
+        ``--resume-dir runs/demo --price 0-2000`` raises because price filters
+        are loaded from ``state.json`` during resume.
+    """
     conflicts = []
     if args.want is not None:
         conflicts.append("--want")
@@ -153,6 +231,22 @@ def _reject_resume_managed_args(args: argparse.Namespace) -> None:
 
 
 def _query_from_args(args: argparse.Namespace) -> MarketQuery:
+    """Create a ``MarketQuery`` from new-run CLI arguments.
+
+    Args:
+        args: ``argparse.Namespace`` parsed CLI options.
+
+    Returns:
+        MarketQuery: Validated query using defaults for omitted filters.
+
+    Raises:
+        ValueError: Raised when category, price, or discount values are not in
+        the supported allow-lists.
+
+    Example:
+        With no filter flags, ``_query_from_args(args).price_filters`` returns
+        ``DEFAULT_PRICE_FILTERS``.
+    """
     price_values = DEFAULT_PRICE_FILTERS if args.price is None else args.price
     discount_values = DEFAULT_DISCOUNT_FILTERS if args.discount is None else args.discount
     prices = _validate_values("price", _split_values(price_values), VALID_PRICE_FILTERS)
@@ -170,6 +264,21 @@ def _query_from_args(args: argparse.Namespace) -> MarketQuery:
 
 
 def _query_from_checkpoint(checkpoint: Checkpoint) -> MarketQuery:
+    """Rebuild a ``MarketQuery`` from checkpoint JSON data.
+
+    Args:
+        checkpoint: ``Checkpoint`` read from an existing run directory.
+
+    Returns:
+        MarketQuery: Query matching the original run's filters and sort mode.
+
+    Raises:
+        ValueError: Raised when checkpoint filters are missing or unsupported.
+
+    Example:
+        A checkpoint query with ``{"categoryFilter": "2312"}`` resumes with
+        ``MarketQuery.category_filter == "2312"``.
+    """
     raw = checkpoint.query
     category = str(raw.get("categoryFilter", DEFAULT_CATEGORY_FILTER)).strip()
     if category not in VALID_CATEGORY_FILTERS:
@@ -195,6 +304,22 @@ def _query_from_checkpoint(checkpoint: Checkpoint) -> MarketQuery:
 
 
 def _delay_policy_from_args(args: argparse.Namespace) -> DelayPolicy:
+    """Create a ``DelayPolicy`` from parsed timing flags.
+
+    Args:
+        args: ``argparse.Namespace`` parsed CLI options.
+
+    Returns:
+        DelayPolicy: Delay configuration for ``ScraperRunner``.
+
+    Raises:
+        ValueError: Raised when delay values are negative or min/max are
+        reversed.
+
+    Example:
+        ``--no-sleep`` returns a policy whose short and long delays are all
+        ``0.0``.
+    """
     min_delay = 0.0 if args.no_sleep else args.min_delay
     max_delay = 0.0 if args.no_sleep else args.max_delay
     long_pause_seconds = 0.0 if args.no_sleep else args.long_pause_seconds
@@ -213,6 +338,18 @@ def _delay_policy_from_args(args: argparse.Namespace) -> DelayPolicy:
 
 
 def _split_values(values: Any) -> tuple[str, ...]:
+    """Normalize CLI list/comma values into a tuple of strings.
+
+    Args:
+        values: ``Any`` value from argparse or checkpoint JSON. It may be
+            ``None``, a string, or an iterable of values.
+
+    Returns:
+        tuple[str, ...]: Non-empty stripped tokens.
+
+    Example:
+        ``_split_values(["a,b", " c "])`` returns ``("a", "b", "c")``.
+    """
     if values is None:
         return ()
     if isinstance(values, str):
@@ -229,6 +366,23 @@ def _validate_values(
     values: tuple[str, ...],
     allowed: frozenset[str],
 ) -> tuple[str, ...]:
+    """Validate that every filter value belongs to an allow-list.
+
+    Args:
+        name: ``str`` display name used in error messages, such as ``"price"``.
+        values: ``tuple[str, ...]`` candidate filter values.
+        allowed: ``frozenset[str]`` supported filter values.
+
+    Returns:
+        tuple[str, ...]: The original ``values`` when all entries are valid.
+
+    Raises:
+        ValueError: Raised when values are empty or contain unsupported entries.
+
+    Example:
+        ``_validate_values("price", ("20000-0",), VALID_PRICE_FILTERS)``
+        returns ``("20000-0",)``.
+    """
     invalid = tuple(value for value in values if value not in allowed)
     if invalid:
         raise ValueError(f"Unsupported {name} filter(s): {', '.join(invalid)}")

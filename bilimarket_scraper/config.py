@@ -1,4 +1,20 @@
-"""Configuration constants for the Bilibili market scraper."""
+"""Configuration constants for the Bilibili market scraper.
+
+This module centralizes values that are shared across CLI parsing, request
+construction, and run storage. It contains only constants so importing it has
+no side effects and does not touch the network or filesystem.
+
+Components:
+    MARKET_API_URL, MARKET_REFERER, DEFAULT_USER_AGENT: ``str`` values used by
+        the HTTP layer.
+    VALID_*_FILTERS: ``frozenset[str]`` allow-lists used by CLI validation.
+    DEFAULT_*: Default filter, sorting, cookie-file, and output-directory
+        values used when users omit optional flags.
+
+Example:
+    ``DEFAULT_OUTPUT_DIR / "20260630-120000"`` is the default shape of a run
+    directory created by ``RunStorage.new``.
+"""
 
 from __future__ import annotations
 
